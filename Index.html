@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale-1.0">
+    <title>Web Cảnh báo Ngập lụt TPHCM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide-react@0.292.0/dist/lucide-react.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6; /* bg-gray-100 */
+        }
+        /* Chiều cao cho bản đồ toàn màn hình (trừ đi chiều cao header) */
+        .full-map-height {
+            height: calc(100vh - 65px); /* 65px là chiều cao header */
+        }
+
+        #map-canvas, #large-map-canvas, #route-map-canvas {
+            width: 100%;
+            border-radius: 0.75rem; /* rounded-xl */
+        }
+        #map-canvas { height: 24rem; /* h-96 */ }
+        #large-map-canvas { height: 100%; }
+        #route-map-canvas { height: 100%; min-height: 400px; }
+        
+        .modal-backdrop {
+            background-color: rgba(0,0,0,0.5);
+        }
+        /* Styling for toggle switch */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #3B82F6; /* blue-600 */
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #3B82F6; /* blue-600 */
+        }
+        /* Pac-container is for Google Places Autocomplete */
+        .pac-container {
+            border-radius: 0.5rem;
+            z-index: 1000 !important;
+        }
+    </style>
+    <!-- 
+        QUAN TRỌNG: LỖI BẢN ĐỒ / TÌM ĐƯỜNG?
+        Lỗi "InvalidKeyMapError" xảy ra do API Key không hợp lệ.
+        Để bản đồ và TÌM ĐƯỜNG hoạt động, bạn CẦN:
+        1. Thay thế chuỗi "YOUR_API_KEY" bên dưới bằng Khóa API Google Maps của riêng bạn.
+        2. Đảm bảo bạn đã BẬT 3 API sau trong Google Cloud Console cho key này:
+           - Maps JavaScript API
+           - Places API (cho gợi ý địa điểm)
+           - Directions API (cho chức năng tìm đường)
+    -->
+    <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAOVYRIgupAurZup5y1PRh8Ismb1A3lLao&libraries=places&callback=initMap"></script>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center modal-backdrop transition-opacity duration-300 opacity-0 pointer-events-none">
+        <div class="bg-white w-full max-w-md rounded-t-2xl sm:rounded-2xl p-6 text-center transform translate-y-full sm:translate-y-0 sm:scale-95 transition-transform duration-300" id="login-modal-content">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-check mx-auto text-blue-600 mb-4"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>
+            <h2 class="text-2xl font-bold text-gray-800">Đăng nhập để an toàn hơn</h2>
+            <p class="text-gray-600 mt-2 mb-6">Sử dụng tài khoản VNeID để nhận cảnh báo được cá nhân hóa cho địa chỉ nhà của bạn và các vị trí quan trọng khác.</p>
+            <button id="vneid-login-button" class="w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center space-x-2 hover:bg-blue-700 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6-45 9-12V5l-9-3zm.24 13.94L9 12.7l1.41-1.41 1.83 1.83 3.54-3.54L17.2 11l-4.96 4.94z"/></svg>
+                <span>Đăng nhập bằng VNeID</span>
+            </button>
+             <button id="skip-login-button" class="mt-3 text-sm text-gray-500 hover:text-gray-700">Bỏ qua</button>
+        </div>
+    </div>
+
+    <!-- VNeID Simulation Screen -->
+    <div id="vneid-simulation-screen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-50 p-4 text-center hidden transition-opacity duration-300">
+        <img src="https://placehold.co/100x100/3B82F6/FFFFFF?text=VNeID" alt="VNeID Logo" class="rounded-2xl mb-4">
+        <h2 class="text-xl font-bold text-gray-800">Xác thực định danh điện tử</h2>
+        <p class="text-gray-600 mt-2 mb-8">Ứng dụng <span class="font-semibold">Cảnh Báo Ngập Lụt</span> muốn xác thực thông tin của bạn.</p>
+        
+        <div class="bg-white rounded-lg p-4 w-full max-w-sm border">
+            <p class="text-gray-500 text-sm">Chủ tài khoản</p>
+            <p class="font-semibold text-lg">An Nguyễn</p>
+        </div>
+
+        <button id="vneid-confirm-button" class="w-full max-w-sm mt-8 bg-blue-600 text-white font-bold py-3 px-4 rounded-xl hover:bg-blue-700 transition-colors">Xác nhận</button>
+        <button id="vneid-cancel-button" class="mt-3 text-sm text-gray-500 hover:text-gray-700">Hủy bỏ</button>
+    </div>
+
+    
+    <!-- Header / Navigation Bar -->
+    <header class="bg-white text-gray-800 p-4 flex items-center justify-between shadow-md z-10 sticky top-0">
+        <h1 class="text-xl font-bold text-blue-600">Cảnh Báo Ngập Lụt TPHCM</h1>
+        
+        <!-- Navigation Links -->
+        <nav class="hidden md:flex items-center space-x-2">
+            <button data-screen="home-screen" class="nav-button px-4 py-2 rounded-lg font-medium text-blue-600 bg-blue-100">Trang chủ</button>
+            <button data-screen="map-screen" class="nav-button px-4 py-2 rounded-lg font-medium text-gray-600 hover:bg-gray-100">Bản đồ</button>
+            <button data-screen="notifications-screen" class="nav-button px-4 py-2 rounded-lg font-medium text-gray-600 hover:bg-gray-100">Cảnh báo</button>
+            <button data-screen="routes-screen" class="nav-button px-4 py-2 rounded-lg font-medium text-gray-600 hover:bg-gray-100">Đường đi</button>
+            <button data-screen="settings-screen" class="nav-button px-4 py-2 rounded-lg font-medium text-gray-600 hover:bg-gray-100">Cài đặt</button>
+        </nav>
+
+        <div id="user-info" class="flex items-center space-x-2">
+             <span id="user-name" class="font-semibold hidden"></span>
+             <svg id="user-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-user-circle"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></svg>
+        </div>
+        
+        <!-- Mobile Menu Button (Hamburger) - A future improvement -->
+         <!-- <button class="md:hidden p-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-menu"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+        </button> -->
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-grow">
+        
+        <!-- Home Screen -->
+        <div id="home-screen" class="p-4 lg:p-8">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                <!-- Column 1: Status & Weather -->
+                <div class="lg:col-span-1 space-y-6">
+                    <section class="bg-white rounded-xl shadow p-5 border border-gray-200">
+                        <div class="flex items-center justify-between mb-3">
+                            <h2 class="text-xl font-semibold text-gray-800">Vị trí của bạn</h2>
+                            <div class="flex items-center space-x-2">
+                                <span id="location-text" class="text-sm font-medium text-blue-600">Quận 1, TP.HCM</span>
+                                <button id="locate-user-button" class="p-1 rounded-full hover:bg-gray-200 active:bg-gray-300 transition-colors">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-crosshair text-gray-600"><circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Thẻ trạng thái ngập (DYNAMIC) -->
+                        <div id="status-card" class="bg-green-50 rounded-lg p-4 flex items-center space-x-4 transition-colors duration-500">
+                            <div id="status-icon-container" class="bg-green-500 p-3 rounded-full transition-colors duration-500">
+                                <svg id="status-icon-svg" xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-check"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+                            </div>
+                            <div>
+                                <p id="status-text" class="text-xl font-bold text-green-800 transition-colors duration-500">An Toàn</p>
+                                <p id="status-description" class="text-sm text-gray-600 transition-colors duration-500">Khu vực hiện tại không có nguy cơ ngập.</p>
+                            </div>
+                        </div>
+
+                        <!-- Thẻ thời tiết (DYNAMIC) -->
+                        <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                            <div class="bg-gray-100 p-3 rounded-lg">
+                                <p class="text-gray-500">Nhiệt độ</p>
+                                <p id="current-temp" class="font-bold text-gray-800">--°C</p>
+                            </div>
+                            <div class="bg-gray-100 p-3 rounded-lg">
+                                <p class="text-gray-500">Thời tiết</p>
+                                <p id="current-weather" class="font-bold text-gray-800 capitalize">--</p>
+                            </div>
+                            <div class="bg-gray-100 p-3 rounded-lg">
+                                <p class="text-gray-500">Độ ẩm</p>
+                                <p id="current-humidity" class="font-bold text-gray-800">--%</p>
+                            </div>
+                            <div class="bg-gray-100 p-3 rounded-lg">
+                                <p class="text-gray-500">Mực nước (giả lập)</p>
+                                <p id="simulated-water-level" class="font-bold text-gray-800">0.1m</p>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Column 2: Map -->
+                <section class="lg:col-span-1 bg-white rounded-xl shadow p-5 border border-gray-200">
+                    <div class="flex items-center justify-between mb-2">
+                        <h2 class="text-xl font-semibold text-gray-800">Bản đồ tổng quan</h2>
+                    </div>
+                    <div id="map-canvas" class="shadow-inner overflow-hidden bg-gray-200 flex items-center justify-center">
+                         <p class="text-gray-500 font-medium">Đang tải bản đồ...</p>
+                    </div>
+                     <div class="flex justify-center space-x-4 mt-4 text-xs">
+                        <div class="flex items-center space-x-1.5"><div class="w-3 h-3 rounded-full bg-green-500"></div><span>An toàn</span></div>
+                        <div class="flex items-center space-x-1.5"><div class="w-3 h-3 rounded-full bg-yellow-400"></div><span>Nguy cơ thấp</span></div>
+                        <div class="flex items-center space-x-1.5"><div class="w-3 h-3 rounded-full bg-red-500"></div><span>Nguy hiểm</span></div>
+                    </div>
+                </section>
+
+                <!-- Column 3: Alerts -->
+                <section class="lg:col-span-1 bg-white rounded-xl shadow p-5 border border-gray-200">
+                    <h2 class="text-xl font-semibold text-gray-800 mb-4">Cảnh báo mới nhất</h2>
+                    <div id="alerts-list" class="space-y-3 max-h-[400px] overflow-y-auto"></div>
+                </section>
+            </div>
+        </div>
+
+        <!-- Map Screen -->
+        <div id="map-screen" class="hidden full-map-height">
+            <div id="large-map-canvas" class="bg-gray-200 rounded-none"></div>
+        </div>
+
+        <!-- Notifications Screen -->
+        <div id="notifications-screen" class="hidden p-4 lg:p-8">
+            <div class="max-w-3xl mx-auto bg-white rounded-xl shadow p-5">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Tất cả cảnh báo</h2>
+                <div class="flex space-x-2 mb-4 border-b">
+                    <button class="alert-filter-btn flex-1 pb-2 border-b-2 border-blue-600 text-blue-600 font-semibold" data-filter="all">Tất cả</button>
+                    <button class="alert-filter-btn flex-1 pb-2 border-b-2 border-transparent text-gray-500" data-filter="danger">Nguy hiểm</button>
+                    <button class="alert-filter-btn flex-1 pb-2 border-b-2 border-transparent text-gray-500" data-filter="warning">Cảnh báo</button>
+                </div>
+                <div id="full-alerts-list" class="space-y-3"></div>
+            </div>
+        </div>
+        
+        <!-- Routes Screen -->
+        <div id="routes-screen" class="hidden full-map-height grid grid-cols-1 lg:grid-cols-3">
+            <div class="lg:col-span-1 p-4 lg:p-8 bg-white shadow-lg z-10 overflow-y-auto">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Tìm đường đi an toàn</h2>
+                <div class="space-y-3">
+                    <div class="relative">
+                        <input type="text" id="start-input" placeholder="Điểm đi của bạn" class="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                        <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-dot text-gray-400"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg>
+                        </div>
+                    </div>
+                     <div class="relative">
+                        <input type="text" id="destination-input" placeholder="Nhập điểm đến" class="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                        <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin text-gray-400"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+                        </div>
+                    </div>
+                    <button id="find-route-button" class="w-full bg-blue-600 text-white font-bold py-2.5 px-4 rounded-lg hover:bg-blue-700 transition-colors">Tìm đường</button>
+                </div>
+                <div id="route-details" class="mt-4 text-center"></div>
+            </div>
+            <div class="lg:col-span-2 bg-gray-200">
+                <div id="route-map-canvas" class="rounded-none"></div>
+            </div>
+        </div>
+        
+        <!-- Settings Screens Container -->
+        <div id="settings-screen" class="hidden p-4 lg:p-8">
+            <div class="max-w-3xl mx-auto">
+                <!-- Main Settings View -->
+                <div id="settings-main-view">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6">Cài đặt</h2>
+                    <div class="bg-white p-5 rounded-xl shadow">
+                         <!-- Logged In View -->
+                        <div id="settings-logged-in" class="hidden">
+                            <div class="space-y-2">
+                                <a href="#" id="account-info-link" class="flex items-center justify-between bg-gray-100 p-4 rounded-lg hover:bg-gray-200 transition-colors">
+                                    <span>Thông tin tài khoản</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-right text-gray-500"><path d="m9 18 6-6-6-6"/></svg>
+                                </a>
+                                <a href="#" id="notification-settings-link" class="flex items-center justify-between bg-gray-100 p-4 rounded-lg hover:bg-gray-200 transition-colors">
+                                    <span>Quản lý thông báo</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-right text-gray-500"><path d="m9 18 6-6-6-6"/></svg>
+                                </a>
+                            </div>
+                            <div class="mt-8">
+                                <button id="logout-button" class="w-full bg-red-500 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center space-x-2 hover:bg-red-600 transition-colors">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-log-out"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                                    <span>Đăng xuất</span>
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Logged Out View -->
+                        <div id="settings-logged-out" class="hidden">
+                            <div class="text-center py-8">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-user-cog mx-auto text-gray-400 mb-4"><circle cx="18" cy="15" r="3"/><circle cx="9" cy="7" r="4"/><path d="M10 15H6a4 4 0 0 0-4 4v2"/><path d="m21.7 16.4-.9-.3"/><path d="m15.2 13.9-.9-.3"/><path d="m16.6 18.7.3-.9"/><path d="m19.1 12.2.3-.9"/><path d="m19.5 16.3.9.3"/><path d="m16.8 19.7.9.3"/><path d="m17.4 12.9-.3.9"/><path d="m15.8 18.1-.3.9"/></svg>
+                                <p class="text-gray-600 mb-4">Bạn cần đăng nhập để quản lý tài khoản và nhận thông báo cá nhân hóa.</p>
+                                <button id="settings-login-button" class="bg-blue-600 text-white font-bold py-3 px-6 rounded-xl flex items-center justify-center space-x-2 hover:bg-blue-700 transition-colors">
+                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-3zm.24 13.94L9 12.7l1.41-1.41 1.83 1.83 3.54-3.54L17.2 11l-4.96 4.94z"/></svg>
+                                     <span>Đăng nhập bằng VNeID</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Account Info Sub-Screen -->
+                <div id="account-info-screen" class="hidden">
+                    <div class="flex items-center mb-6">
+                        <button class="settings-back-button p-2 -ml-2 rounded-lg hover:bg-gray-200">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-left"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+                        </button>
+                        <h2 class="text-2xl font-bold text-gray-800 ml-2">Thông tin tài khoản</h2>
+                    </div>
+                    <div class="space-y-4 bg-white p-5 rounded-xl shadow">
+                        <div class="bg-gray-100 p-3 rounded-lg">
+                            <p class="text-sm text-gray-500">Họ và tên</p>
+                            <p class="font-semibold text-gray-800">An Nguyễn</p>
+                        </div>
+                        <div class="bg-gray-100 p-3 rounded-lg">
+                            <p class="text-sm text-gray-500">Số định danh</p>
+                            <p class="font-semibold text-gray-800">***********1234</p>
+                        </div>
+                        <div class="bg-gray-100 p-3 rounded-lg">
+                            <p class="text-sm text-gray-500">Địa chỉ đăng ký</p>
+                            <p class="font-semibold text-gray-800">123 Đường ABC, Phường X, Quận Y, TP.HCM</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Notification Settings Sub-Screen -->
+                <div id="notification-settings-screen" class="hidden">
+                    <div class="flex items-center mb-6">
+                        <button class="settings-back-button p-2 -ml-2 rounded-lg hover:bg-gray-200">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-left"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+                        </button>
+                        <h2 class="text-2xl font-bold text-gray-800 ml-2">Quản lý thông báo</h2>
+                    </div>
+                    <div class="space-y-2 bg-white p-5 rounded-xl shadow">
+                        <div class="bg-gray-100 p-4 rounded-lg flex justify-between items-center">
+                            <div>
+                                <p class="font-semibold text-gray-800">Cảnh báo khẩn cấp</p>
+                                <p class="text-sm text-gray-500">Mức độ nguy hiểm cao nhất</p>
+                            </div>
+                            <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                                <input type="checkbox" name="toggle" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-not-allowed" checked disabled/>
+                                <label class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-not-allowed"></label>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-gray-100 rounded-lg">
+                            <button class="notification-toggle w-full flex justify-between items-center p-4 text-left">
+                                <span class="font-semibold text-gray-800">Cảnh báo cho vị trí hiện tại</span>
+                                <div class="flex items-center space-x-3">
+                                    <div class="relative inline-block w-10 align-middle select-none" onclick="event.stopPropagation()">
+                                        <input type="checkbox" name="toggle-current-location" id="toggle-current-location" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer" checked/>
+                                        <label for="toggle-current-location" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                                    </div>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chevron-icon w-5 h-5 text-gray-500 transition-transform transform"><path d="m6 9 6 6 6-6"/></svg>
+                                </div>
+                            </button>
+                            <div class="notification-content hidden px-4 pb-4 text-sm text-gray-600">
+                                <p>Dựa trên GPS của bạn. Ứng dụng sẽ tự động gửi cảnh báo khi bạn di chuyển vào khu vực được dự báo có nguy cơ ngập lụt.</p>
+                            </div>
+                        </div>
+
+                        <div class="bg-gray-100 rounded-lg">
+                            <button class="notification-toggle w-full flex justify-between items-center p-4 text-left">
+                               <span class="font-semibold text-gray-800">Cảnh báo cho địa chỉ nhà</span>
+                                <div class="flex items-center space-x-3">
+                                   <div class="relative inline-block w-10 align-middle select-none" onclick="event.stopPropagation()">
+                                       <input type="checkbox" name="toggle-home-address" id="toggle-home-address" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer" checked/>
+                                       <label for="toggle-home-address" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                                   </div>
+                                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chevron-icon w-5 h-5 text-gray-500 transition-transform transform"><path d="m6 9 6 6 6-6"/></svg>
+                               </div>
+                           </button>
+                           <div class="notification-content hidden px-4 pb-4 text-sm text-gray-600">
+                               <p>Nhận thông báo cho địa chỉ đã đăng ký VNeID của bạn: <span class="font-medium">123 Đường ABC, Phường X, Quận Y, TP.HCM</span>. Giúp bạn chủ động ngay cả khi không ở nhà.</p>
+                           </div>
+                       </div>
+                       
+                        <div class="bg-gray-100 rounded-lg">
+                            <button class="notification-toggle w-full flex justify-between items-center p-4 text-left">
+                               <span class="font-semibold text-gray-800">Thông báo triều cường</span>
+                                <div class="flex items-center space-x-3">
+                                   <div class="relative inline-block w-10 align-middle select-none" onclick="event.stopPropagation()">
+                                       <input type="checkbox" name="toggle-tide" id="toggle-tide" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer"/>
+                                       <label for="toggle-tide" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                                   </div>
+                                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chevron-icon w-5 h-5 text-gray-500 transition-transform transform"><path d="m6 9 6 6 6-6"/></svg>
+                               </div>
+                           </button>
+                           <div class="notification-content hidden px-4 pb-4 text-sm text-gray-600">
+                               <p>Nhận cảnh báo trước các đợt triều cường lớn theo lịch của Đài khí tượng thủy văn khu vực Nam Bộ, giúp bạn chủ động sắp xếp công việc và di chuyển.</p>
+                           </div>
+                       </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Bottom Navigation for Mobile (hidden on desktop) -->
+    <nav class="bg-white border-t border-gray-200 p-2 grid grid-cols-5 gap-1 md:hidden fixed bottom-0 left-0 right-0 z-10">
+        <button data-screen="home-screen" class="nav-button-mobile p-2 rounded-lg flex flex-col items-center justify-center text-blue-600 bg-blue-50">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-home"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            <span class="text-xs font-medium">Trang chủ</span>
+        </button>
+        <button data-screen="map-screen" class="nav-button-mobile p-2 rounded-lg flex flex-col items-center justify-center text-gray-500">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" x2="9" y1="3" y2="18"/><line x1="15" x2="15" y1="6" y2="21"/></svg>
+            <span class="text-xs font-medium">Bản đồ</span>
+        </button>
+        <button data-screen="notifications-screen" class="nav-button-mobile p-2 rounded-lg flex flex-col items-center justify-center text-gray-500">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bell"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+            <span class="text-xs font-medium">Cảnh báo</span>
+        </button>
+        <button data-screen="routes-screen" class="nav-button-mobile p-2 rounded-lg flex flex-col items-center justify-center text-gray-500">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-navigation"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
+            <span class="text-xs font-medium">Đường đi</span>
+        </button>
+        <button data-screen="settings-screen" class="nav-button-mobile p-2 rounded-lg flex flex-col items-center justify-center text-gray-500">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span class="text-xs font-medium">Cài đặt</span>
+        </button>
+    </nav>
+
+    <script>
+        // --- API Keys ---
+        // TODO: Thay thế bằng API key của bạn
+        // Lấy key miễn phí từ: https://openweathermap.org/api
+        const openWeatherApiKey = 'bd5e378503939ddaee76f12ad7a97608'; 
+
+        // Global variables for maps and user markers
+        let map = null, userMarker = null, largeMap = null, largeMapUserMarker = null, routeMap = null;
+        let directionsService = null, directionsRenderer = null;
+        
+        const hcmc = { lat: 10.7769, lng: 106.7009 };
+        const floodPoints = [
+            { lat: 10.782, lng: 106.715, level: 'danger' }, { lat: 10.738, lng: 106.71, level: 'warning' }, { lat: 10.803, lng: 106.74, level: 'danger' }
+        ];
+
+        // --- Google Map Error Handling ---
+        function handleMapError() {
+            const mapCanvases = ["map-canvas", "large-map-canvas", "route-map-canvas"];
+            mapCanvases.forEach(id => {
+                 const mapCanvas = document.getElementById(id);
+                 if (mapCanvas && (mapCanvas.innerHTML.includes("Đang tải") || mapCanvas.innerHTML === '')) {
+                    mapCanvas.innerHTML = `<div class="p-4 text-center text-red-700 bg-red-100 rounded-lg h-full flex flex-col justify-center"><p class="font-bold">Không thể tải bản đồ</p><p class="text-sm">API Key của Google Maps không hợp lệ hoặc đã bị thiếu.</p></div>`;
+                }
+            });
+        }
+        window.gm_authFailure = handleMapError;
+        
+        // --- Map Drawing Functions ---
+        function drawFloodWarnings(targetMap) {
+            if (!targetMap) return;
+             const levelConfigMap = { danger: { color: '#EF4444', opacity: 0.5 }, warning: { color: '#FBBF24', opacity: 0.5 } };
+            floodPoints.forEach(point => {
+                const config = levelConfigMap[point.level];
+                if(config) new google.maps.Circle({
+                    strokeColor: config.color, strokeOpacity: 0.8, strokeWeight: 1, fillColor: config.color, fillOpacity: config.opacity,
+                    map: targetMap, center: { lat: point.lat, lng: point.lng }, radius: 700
+                });
+            });
+        }
+        
+        function updateUserMarker(targetMap, marker, position) {
+             if (!targetMap) return marker;
+             if (marker) {
+                 marker.setPosition(position);
+             } else {
+                 marker = new google.maps.Marker({
+                     position: position, map: targetMap, title: 'Vị trí của bạn',
+                     icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "white", strokeWeight: 2 }
+                 });
+             }
+             targetMap.setCenter(position);
+             targetMap.setZoom(15);
+             return marker;
+        }
+
+        // --- Google Map Initialization ---
+        function initMap() {
+            try {
+                if (typeof google === 'undefined' || typeof google.maps === 'undefined') {
+                    console.error("Google Maps script failed to load.");
+                    handleMapError(); return;
+                }
+                map = new google.maps.Map(document.getElementById("map-canvas"), {
+                    zoom: 12, center: hcmc, disableDefaultUI: true,
+                    styles: [{"featureType": "poi.business", "stylers": [{ "visibility": "off" }]}, {"featureType": "poi.park", "elementType": "labels.text", "stylers": [{ "visibility": "off" }]}]
+                });
+                drawFloodWarnings(map);
+
+                // Initialize Directions services
+                directionsService = new google.maps.DirectionsService();
+                directionsRenderer = new google.maps.DirectionsRenderer();
+
+                 // Initialize Autocomplete
+                const startInput = document.getElementById('start-input');
+                const destinationInput = document.getElementById('destination-input');
+                const autocompleteOptions = {
+                    bounds: new google.maps.LatLngBounds(
+                        new google.maps.LatLng(10.3, 106.3),
+                        new google.maps.LatLng(11.2, 107.1)
+                    ),
+                    componentRestrictions: { country: 'vn' },
+                    strictBounds: false
+                };
+                new google.maps.places.Autocomplete(startInput, autocompleteOptions);
+                new google.maps.places.Autocomplete(destinationInput, autocompleteOptions);
+
+
+            } catch (e) {
+                console.error("Error in initMap:", e);
+                handleMapError();
+            }
+        }
+        
+        function initLargeMap() {
+            if (largeMap) return; // Initialize only once
+             if (typeof google === 'undefined' || typeof google.maps === 'undefined') { return; }
+            largeMap = new google.maps.Map(document.getElementById("large-map-canvas"), {
+                zoom: 12, center: hcmc, disableDefaultUI: true, zoomControl: true, streetViewControl: false, mapTypeControl: false,
+                styles: [{"featureType": "poi.business", "stylers": [{ "visibility": "off" }]}, {"featureType": "poi.park", "elementType": "labels.text", "stylers": [{ "visibility": "off" }]}]
+            });
+            drawFloodWarnings(largeMap);
+        }
+
+        function initRouteMap() {
+            if (routeMap) return; // Initialize only once
+             if (typeof google === 'undefined' || typeof google.maps === 'undefined') { return; }
+            routeMap = new google.maps.Map(document.getElementById("route-map-canvas"), {
+                zoom: 12, center: hcmc, disableDefaultUI: true,
+                styles: [{"featureType": "poi.business", "stylers": [{ "visibility": "off" }]}, {"featureType": "poi.park", "elementType": "labels.text", "stylers": [{ "visibility": "off" }]}]
+            });
+            directionsRenderer.setMap(routeMap);
+        }
+        
+        // --- Directions Function ---
+        function calculateAndDisplayRoute() {
+            const start = document.getElementById('start-input').value;
+            const end = document.getElementById('destination-input').value;
+            const routeDetailsEl = document.getElementById('route-details');
+
+            if (!start || !end) {
+                routeDetailsEl.innerHTML = `<p class="text-red-500">Vui lòng nhập cả điểm đi và điểm đến.</p>`;
+                return;
+            }
+            routeDetailsEl.innerHTML = `<p class="text-gray-500">Đang tìm đường...</p>`;
+
+            directionsService.route(
+                {
+                    origin: start,
+                    destination: end,
+                    travelMode: google.maps.TravelMode.DRIVING,
+                },
+                (response, status) => {
+                    if (status === "OK") {
+                        directionsRenderer.setDirections(response);
+                        const route = response.routes[0].legs[0];
+                        routeDetailsEl.innerHTML = `
+                            <div class="bg-gray-100 p-3 rounded-lg">
+                                <p class="text-lg font-bold text-blue-600">${route.duration.text}</p>
+                                <p class="text-sm text-gray-600">Quãng đường: ${route.distance.text}</p>
+                            </div>
+                        `;
+                    } else {
+                        // Không dùng alert
+                        console.error("Directions request failed due to " + status);
+                        routeDetailsEl.innerHTML = `<p class="text-red-500">Không tìm thấy đường đi. Vui lòng thử lại.</p>`;
+                    }
+                }
+            );
+        }
+
+        // --- Weather Function ---
+        function fetchWeatherData(lat, lon) {
+            if (openWeatherApiKey === 'YOUR_OPENWEATHER_API_KEY') {
+                console.warn("Chưa có API key của OpenWeatherMap. Vui lòng thêm key vào biến 'openWeatherApiKey'.");
+                 document.getElementById('current-temp').textContent = "Cần API Key";
+                 document.getElementById('current-weather').textContent = "Cần API Key";
+                 document.getElementById('current-humidity').textContent = "Cần API Key";
+                return;
+            }
+            
+            const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${openWeatherApiKey}&units=metric&lang=vi`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.cod === 200) {
+                        document.getElementById('current-temp').textContent = `${Math.round(data.main.temp)}°C`;
+                        document.getElementById('current-weather').textContent = data.weather[0].description;
+                        document.getElementById('current-humidity').textContent = `${data.main.humidity}%`;
+                    } else {
+                        console.error("Lỗi khi lấy dữ liệu thời tiết:", data.message);
+                    }
+                })
+                .catch(error => console.error("Lỗi khi gọi API thời tiết:", error));
+        }
+
+        // --- Flood Status Simulation ---
+        const floodStatuses = [
+            {
+                level: 'safe',
+                bgColor: 'bg-green-50',
+                iconBg: 'bg-green-500',
+                textColor: 'text-green-800',
+                text: 'An Toàn',
+                description: 'Khu vực hiện tại không có nguy cơ ngập.',
+                waterLevel: '0.1m',
+                iconSvg: '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-check"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>'
+            },
+            {
+                level: 'warning',
+                bgColor: 'bg-yellow-50',
+                iconBg: 'bg-yellow-400',
+                textColor: 'text-yellow-800',
+                text: 'Nguy cơ thấp',
+                description: 'Khu vực có nguy cơ ngập nhẹ, chú ý di chuyển.',
+                waterLevel: '0.3m',
+                iconSvg: '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-half"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 22V2"/></svg>'
+            },
+            {
+                level: 'danger',
+                bgColor: 'bg-red-50',
+                iconBg: 'bg-red-500',
+                textColor: 'text-red-800',
+                text: 'Nguy hiểm',
+                description: 'Đang ngập sâu. Hạn chế di chuyển qua khu vực này.',
+                waterLevel: '0.6m',
+                iconSvg: '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-alert"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>'
+            }
+        ];
+        
+        function updateFloodStatusUI(status) {
+            const statusCard = document.getElementById('status-card');
+            if (!statusCard) return; // Chỉ chạy nếu đang ở trang chủ
+            
+            statusCard.className = `rounded-lg p-4 flex items-center space-x-4 transition-colors duration-500 ${status.bgColor}`;
+            document.getElementById('status-icon-container').className = `p-3 rounded-full transition-colors duration-500 ${status.iconBg}`;
+            document.getElementById('status-text').className = `text-xl font-bold transition-colors duration-500 ${status.textColor}`;
+            document.getElementById('status-description').textContent = status.description;
+            document.getElementById('status-icon-svg').innerHTML = status.iconSvg;
+            document.getElementById('simulated-water-level').textContent = status.waterLevel;
+        }
+
+        function simulateFloodUpdates() {
+            setInterval(() => {
+                if(document.getElementById('home-screen').classList.contains('hidden')) {
+                    return; // Không mô phỏng nếu không ở trang chủ
+                }
+                const randomStatus = floodStatuses[Math.floor(Math.random() * floodStatuses.length)];
+                updateFloodStatusUI(randomStatus);
+            }, 10000); // Cập nhật mỗi 10 giây
+        }
+
+
+        // --- MOCK DATA FOR ALERTS LIST ---
+        const alertsData = [{"location": "Đường Nguyễn Hữu Cảnh, Q. Bình Thạnh", "level": "danger", "message": "Đang ngập sâu, mực nước 0.5m. Các phương tiện nên tránh.", "time": "15 phút trước"}, {"location": "Đường Huỳnh Tấn Phát, Quận 7", "level": "warning", "message": "Triều cường dâng cao, có nguy cơ ngập trong 30 phút tới.", "time": "20 phút trước"}, {"location": "Khu vực Thảo Điền, TP. Thủ Đức", "level": "danger", "message": "Ngập do mưa lớn, một số tuyến hẻm đã bị chia cắt.", "time": "45 phút trước"}, {"location": "Đường Phan Xích Long, Q. Phú Nhuận", "level": "safe", "message": "Khu vực đã hết ngập, giao thông trở lại bình thường.", "time": "1 giờ trước"}];
+
+        // --- UI LOGIC ---
+        document.addEventListener('DOMContentLoaded', function() {
+            // Element Refs
+            const alertsList = document.getElementById('alerts-list');
+            const fullAlertsList = document.getElementById('full-alerts-list');
+            const alertFilterBtns = document.querySelectorAll('.alert-filter-btn');
+            const navButtons = document.querySelectorAll('.nav-button'); // Desktop nav
+            const navButtonsMobile = document.querySelectorAll('.nav-button-mobile'); // Mobile nav
+            const mainScreens = document.querySelectorAll('main > div');
+            const loginModal = document.getElementById('login-modal');
+            const loginModalContent = document.getElementById('login-modal-content');
+            const vneidLoginButton = document.getElementById('vneid-login-button');
+            const skipLoginButton = document.getElementById('skip-login-button');
+            const vneidSimScreen = document.getElementById('vneid-simulation-screen');
+            const vneidConfirmButton = document.getElementById('vneid-confirm-button');
+            const vneidCancelButton = document.getElementById('vneid-cancel-button');
+            const userNameDisplay = document.getElementById('user-name');
+            const userIcon = document.getElementById('user-icon');
+            const logoutButton = document.getElementById('logout-button');
+            const locateUserButton = document.getElementById('locate-user-button');
+            const locationText = document.getElementById('location-text');
+            const findRouteButton = document.getElementById('find-route-button');
+            
+            // Settings Screen Refs
+            const settingsMainView = document.getElementById('settings-main-view');
+            const settingsLoggedInView = document.getElementById('settings-logged-in');
+            const settingsLoggedOutView = document.getElementById('settings-logged-out');
+            const settingsLoginButton = document.getElementById('settings-login-button');
+            const accountInfoScreen = document.getElementById('account-info-screen');
+            const notificationSettingsScreen = document.getElementById('notification-settings-screen');
+            const accountInfoLink = document.getElementById('account-info-link');
+            const notificationSettingsLink = document.getElementById('notification-settings-link');
+            const settingsBackButtons = document.querySelectorAll('.settings-back-button');
+
+            // --- Auth Logic ---
+            function showLoginModal() {
+                loginModal.classList.remove('opacity-0', 'pointer-events-none');
+                setTimeout(() => loginModalContent.classList.remove('translate-y-full', 'sm:scale-95'), 10);
+            }
+
+            function hideLoginModal() {
+                 loginModalContent.classList.add('translate-y-full', 'sm:scale-95');
+                 setTimeout(() => loginModal.classList.add('opacity-0', 'pointer-events-none'), 300);
+            }
+            
+            function updateUIBasedOnLoginState() {
+                const isLoggedIn = sessionStorage.getItem('isLoggedIn') === 'true';
+                if (isLoggedIn) {
+                    userNameDisplay.textContent = 'An Nguyễn';
+                    userNameDisplay.classList.remove('hidden');
+                    userIcon.classList.add('hidden');
+                    if (settingsLoggedInView) settingsLoggedInView.classList.remove('hidden');
+                    if (settingsLoggedOutView) settingsLoggedOutView.classList.add('hidden');
+                    hideLoginModal();
+                } else {
+                    userNameDisplay.classList.add('hidden');
+                    userIcon.classList.remove('hidden');
+                    if (settingsLoggedInView) settingsLoggedInView.classList.add('hidden');
+                    if (settingsLoggedOutView) settingsLoggedOutView.classList.remove('hidden');
+                }
+            }
+
+            // --- Screen Navigation Logic ---
+            function switchScreen(screenId) {
+                mainScreens.forEach(screen => screen.classList.add('hidden'));
+                const activeScreen = document.getElementById(screenId);
+                if (activeScreen) activeScreen.classList.remove('hidden');
+
+                if (screenId === 'map-screen') initLargeMap();
+                if (screenId === 'routes-screen') initRouteMap();
+                if (screenId === 'notifications-screen') renderFullAlerts(document.querySelector('.alert-filter-btn[data-filter="all"]').dataset.filter);
+
+                if(screenId === 'settings-screen') {
+                    settingsMainView.classList.remove('hidden');
+                    accountInfoScreen.classList.add('hidden');
+                    notificationSettingsScreen.classList.add('hidden');
+                }
+
+                // Sync both navs
+                [...navButtons, ...navButtonsMobile].forEach(button => {
+                    if (button.dataset.screen === screenId) {
+                        button.classList.add('text-blue-600', 'bg-blue-100');
+                        button.classList.remove('text-gray-600', 'hover:bg-gray-100', 'text-gray-500');
+                    } else {
+                        button.classList.remove('text-blue-600', 'bg-blue-100');
+                        button.classList.add('text-gray-600', 'hover:bg-gray-100');
+                        if(button.classList.contains('nav-button-mobile')) {
+                             button.classList.add('text-gray-500');
+                             button.classList.remove('text-gray-600', 'hover:bg-gray-100');
+                        }
+                    }
+                });
+            }
+
+            // --- Alerts Rendering ---
+            function renderAlerts(targetElement, filter = 'all') {
+                if (!targetElement) return;
+                targetElement.innerHTML = ''; 
+                const levelConfig = {
+                    danger: { icon: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-alert text-white"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>`, bgColor: 'bg-red-500', textColor: 'text-red-800', badgeColor: 'bg-red-100', title: 'Nguy hiểm' },
+                    warning: { icon: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-half text-white"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 22V2"/></svg>`, bgColor: 'bg-yellow-400', textColor: 'text-yellow-800', badgeColor: 'bg-yellow-100', title: 'Cảnh báo' },
+                    safe: { icon: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-check text-white"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>`, bgColor: 'bg-green-500', textColor: 'text-green-800', badgeColor: 'bg-green-100', title: 'An toàn' }
+                };
+                const filteredData = (filter === 'all') ? alertsData : alertsData.filter(a => a.level === filter);
+
+                if (filteredData.length === 0) {
+                    targetElement.innerHTML = `<p class="text-center text-gray-500 mt-8">Không có cảnh báo nào.</p>`;
+                    return;
+                }
+
+                filteredData.forEach(alert => {
+                    const config = levelConfig[alert.level];
+                    const el = document.createElement('div');
+                    el.className = 'bg-white p-3 rounded-xl shadow-sm border border-gray-200 flex items-start space-x-3';
+                    el.innerHTML = `<div class="flex-shrink-0 w-10 h-10 rounded-full ${config.bgColor} flex items-center justify-center">${config.icon}</div><div class="flex-grow"><div class="flex items-center justify-between"><p class="font-semibold text-gray-800">${alert.location}</p><span class="text-xs text-gray-500">${alert.time}</span></div><span class="text-xs font-bold px-2 py-0.5 rounded-full ${config.badgeColor} ${config.textColor}">${config.title}</span><p class="text-sm text-gray-600 mt-1">${alert.message}</p></div>`;
+                    targetElement.appendChild(el);
+                });
+            }
+            const renderFullAlerts = (filter = 'all') => renderAlerts(fullAlertsList, filter);
+
+            // --- Event Listeners ---
+            [...navButtons, ...navButtonsMobile].forEach(button => {
+                 button.addEventListener('click', () => switchScreen(button.dataset.screen));
+            });
+            vneidLoginButton.addEventListener('click', () => vneidSimScreen.classList.remove('hidden'));
+            skipLoginButton.addEventListener('click', hideLoginModal);
+            vneidCancelButton.addEventListener('click', () => vneidSimScreen.classList.add('hidden'));
+            vneidConfirmButton.addEventListener('click', () => {
+                sessionStorage.setItem('isLoggedIn', 'true');
+                vneidSimScreen.classList.add('hidden');
+                updateUIBasedOnLoginState();
+            });
+            logoutButton.addEventListener('click', () => {
+                sessionStorage.removeItem('isLoggedIn');
+                location.reload();
+            });
+            settingsLoginButton.addEventListener('click', showLoginModal);
+            alertFilterBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    alertFilterBtns.forEach(b => {
+                        b.classList.remove('border-blue-600', 'text-blue-600', 'font-semibold');
+                        b.classList.add('border-transparent', 'text-gray-500');
+                    });
+                    btn.classList.add('border-blue-600', 'text-blue-600', 'font-semibold');
+                    btn.classList.remove('border-transparent', 'text-gray-500');
+                    renderFullAlerts(btn.dataset.filter);
+                });
+            });
+
+            findRouteButton.addEventListener('click', calculateAndDisplayRoute);
+            
+            // Geolocation Logic
+            locateUserButton.addEventListener('click', () => {
+                if (!navigator.geolocation) {
+                    locationText.textContent = 'Trình duyệt không hỗ trợ GPS';
+                    return;
+                }
+                locationText.textContent = 'Đang xác định...';
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const userLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
+                        locationText.textContent = `Đã cập nhật vị trí`;
+                        userMarker = updateUserMarker(map, userMarker, userLocation);
+                        largeMapUserMarker = updateUserMarker(largeMap, largeMapUserMarker, userLocation);
+                        // Tải dữ liệu thời tiết khi có vị trí
+                        fetchWeatherData(userLocation.lat, userLocation.lng);
+                    },
+                    (error) => {
+                        switch(error.code) {
+                            case error.PERMISSION_DENIED: locationText.textContent = "Bạn đã từ chối vị trí"; break;
+                            case error.POSITION_UNAVAILABLE: locationText.textContent = "Không có thông tin vị trí"; break;
+                            case error.TIMEOUT: locationText.textContent = "Yêu cầu vị trí hết hạn"; break;
+                            case error.UNKNOWN_ERROR: locationText.textContent = "Lỗi không xác định"; break;
+                        }
+                    }
+                );
+            });
+
+            // Settings Sub-screen Navigation
+            accountInfoLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                settingsMainView.classList.add('hidden');
+                accountInfoScreen.classList.remove('hidden');
+            });
+            notificationSettingsLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                settingsMainView.classList.add('hidden');
+                notificationSettingsScreen.classList.remove('hidden');
+            });
+            settingsBackButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    accountInfoScreen.classList.add('hidden');
+                    notificationSettingsScreen.classList.add('hidden');
+                    settingsMainView.classList.remove('hidden');
+                });
+            });
+
+            // Settings Collapsible Sections
+            const notificationToggles = document.querySelectorAll('.notification-toggle');
+            notificationToggles.forEach(toggle => {
+                toggle.addEventListener('click', () => {
+                    const content = toggle.nextElementSibling;
+                    const icon = toggle.querySelector('.chevron-icon');
+
+                    if (content && content.classList.contains('notification-content')) {
+                        content.classList.toggle('hidden');
+                        icon.classList.toggle('rotate-180');
+                    }
+                });
+            });
+
+            // --- Initial Setup ---
+            updateUIBasedOnLoginState();
+            if (sessionStorage.getItem('isLoggedIn') !== 'true') {
+                 setTimeout(showLoginModal, 500);
+            }
+            renderAlerts(alertsList);
+            switchScreen('home-screen');
+            simulateFloodUpdates(); // Bắt đầu mô phỏng
+        });
+    </script>
+
+</body>
+</html>
+
